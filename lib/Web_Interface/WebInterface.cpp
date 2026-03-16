@@ -46,20 +46,17 @@ void setupWebInterface(WebServer &server)
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Hydroponics Controller</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#111827;color:#e5e7eb;padding:16px}
 h1{text-align:center;color:#34d399;margin-bottom:20px;font-size:22px;letter-spacing:.02em}
 h2{font-size:14px;color:#34d399;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid #1f2937;text-transform:uppercase;letter-spacing:.06em}
-
-/* Sensor cards */
 .cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px}
 .card{flex:1;min-width:100px;background:#1f2937;border-radius:12px;padding:14px 10px;text-align:center;border:1px solid #374151}
 .card-label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
 .card-value{font-size:32px;font-weight:700;color:#34d399;line-height:1.1}
 .card-unit{font-size:10px;color:#4b5563;margin-top:3px}
-
-/* Pump grid */
 .pump-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px}
 .pump-card{background:#1f2937;border-radius:10px;padding:12px;border:2px solid #374151;transition:border-color .2s}
 .pump-card.on{border-color:#34d399}
@@ -69,34 +66,38 @@ h2{font-size:14px;color:#34d399;margin:22px 0 10px;padding-bottom:6px;border-bot
 .btn-on{background:#34d399;color:#111827}.btn-on:hover{opacity:.85}
 .btn-off{background:#ef4444;color:#fff}.btn-off:hover{opacity:.85}
 .pump-timer{font-size:11px;color:#34d399;margin-top:5px;min-height:15px}
-
-/* Graph section */
-.gtoggle{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.gtoggle{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center}
 .gtbtn{background:#1f2937;color:#9ca3af;border:1px solid #374151;border-radius:6px;padding:7px 18px;cursor:pointer;font-size:12px;font-weight:600;transition:all .15s}
 .gtbtn.active{background:#34d399;color:#111827;border-color:#34d399}
 .chart-box{background:#1f2937;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #374151}
 .chart-box h3{font-size:11px;color:#6b7280;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em}
-canvas{max-height:200px}
+canvas{max-height:220px}
+.thresh-panel{background:#0d1117;border:1px solid #374151;border-radius:8px;padding:14px;margin-bottom:14px}
+.thresh-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.thresh-row:last-child{margin-bottom:0}
+.thresh-label{font-size:12px;color:#9ca3af;min-width:90px}
+.thresh-input{background:#1f2937;border:1px solid #374151;border-radius:5px;color:#e5e7eb;padding:5px 8px;font-size:12px;width:72px}
+.thresh-input:focus{outline:none;border-color:#34d399}
+.thresh-sep{font-size:12px;color:#6b7280}
 </style>
 </head>
 <body>
 <h1>&#127807; Hydroponics Controller</h1>
 
-<!-- Sensor Cards -->
 <div class="cards">
   <div class="card">
     <div class="card-label">pH</div>
     <div class="card-value" id="v-ph">--</div>
   </div>
   <div class="card">
-    <div class="card-label">TDS / EC</div>
+    <div class="card-label">TDS</div>
     <div class="card-value" id="v-ec">--</div>
-    <div class="card-unit">mS/cm</div>
+    <div class="card-unit">ppm</div>
   </div>
   <div class="card">
     <div class="card-label">Temperature</div>
     <div class="card-value" id="v-temp">--</div>
-    <div class="card-unit">&deg;C</div>
+    <div class="card-unit">&deg;F</div>
   </div>
   <div class="card">
     <div class="card-label">Humidity</div>
@@ -105,42 +106,89 @@ canvas{max-height:200px}
   </div>
 </div>
 
-<!-- Pump Controls -->
 <h2>Pump Controls</h2>
 <div class="pump-grid" id="pump-grid"></div>
 
-<!-- History Graphs -->
 <h2>Sensor History</h2>
 <div class="gtoggle">
-  <button class="gtbtn active" id="btn-c" onclick="setView('c')">Combined</button>
-  <button class="gtbtn"        id="btn-s" onclick="setView('s')">Separate</button>
+  <button class="gtbtn active" id="btn-c"      onclick="setView('c')">Combined</button>
+  <button class="gtbtn"        id="btn-s"      onclick="setView('s')">Separate</button>
+  <button class="gtbtn"        id="btn-thresh" onclick="toggleThresholds()">Thresholds: OFF</button>
+</div>
+
+<div id="thresh-panel" style="display:none">
+  <div class="thresh-row">
+    <span class="thresh-label">pH</span>
+    <input class="thresh-input" type="number" id="th-ph-min"   value="5"   step="0.1" onchange="updateThreshold('ph')">
+    <span class="thresh-sep">to</span>
+    <input class="thresh-input" type="number" id="th-ph-max"   value="9"   step="0.1" onchange="updateThreshold('ph')">
+  </div>
+  <div class="thresh-row">
+    <span class="thresh-label">TDS (ppm)</span>
+    <input class="thresh-input" type="number" id="th-ec-min"   value="130" step="1"   onchange="updateThreshold('ec')">
+    <span class="thresh-sep">to</span>
+    <input class="thresh-input" type="number" id="th-ec-max"   value="150" step="1"   onchange="updateThreshold('ec')">
+  </div>
+  <div class="thresh-row">
+    <span class="thresh-label">Temp (&deg;F)</span>
+    <input class="thresh-input" type="number" id="th-temp-min" value="60"  step="0.5" onchange="updateThreshold('temp')">
+    <span class="thresh-sep">to</span>
+    <input class="thresh-input" type="number" id="th-temp-max" value="80"  step="0.5" onchange="updateThreshold('temp')">
+  </div>
+  <div class="thresh-row">
+    <span class="thresh-label">Humidity (%)</span>
+    <input class="thresh-input" type="number" id="th-hum-min"  value="40"  step="1"   onchange="updateThreshold('hum')">
+    <span class="thresh-sep">to</span>
+    <input class="thresh-input" type="number" id="th-hum-max"  value="80"  step="1"   onchange="updateThreshold('hum')">
+  </div>
 </div>
 
 <div id="view-c">
   <div class="chart-box">
-    <h3>All Sensors &mdash; switch to Separate for individual scales</h3>
+    <h3>All Sensors</h3>
     <canvas id="ch-all"></canvas>
   </div>
 </div>
-
 <div id="view-s" style="display:none">
   <div class="chart-box"><h3>pH</h3><canvas id="ch-ph"></canvas></div>
-  <div class="chart-box"><h3>TDS / EC (mS/cm)</h3><canvas id="ch-ec"></canvas></div>
-  <div class="chart-box"><h3>Temperature (&deg;C)</h3><canvas id="ch-temp"></canvas></div>
+  <div class="chart-box"><h3>TDS (ppm)</h3><canvas id="ch-ec"></canvas></div>
+  <div class="chart-box"><h3>Temperature (&deg;F)</h3><canvas id="ch-temp"></canvas></div>
   <div class="chart-box"><h3>Humidity (%RH)</h3><canvas id="ch-hum"></canvas></div>
 </div>
 
 <script>
 const AUTO_OFF_MS = 30000;
-let pumpStopAt = {};
-let histData    = null;
-let viewMode    = 'c';
-let charts      = {};
+let pumpStopAt     = {};
+let histData       = null;
+let viewMode       = 'c';
+let charts         = {};
+let showThresholds = false;
 
-// ---- Chart helpers ----
+const thresholds = {
+  ph:   { min: 5.0,  max: 9.0  },
+  ec:   { min: 130,  max: 150  },
+  temp: { min: 60.0, max: 80.0 },
+  hum:  { min: 40.0, max: 80.0 }
+};
+
 const COLORS = { ph:'#34d399', ec:'#fbbf24', temp:'#f87171', hum:'#a78bfa' };
 
-function baseOpts(yLabel) {
+// °C -> °F conversion for history arrays
+const toFArr = (arr) => arr.map(c => parseFloat((c * 9 / 5 + 32).toFixed(2)));
+
+// ---- Threshold annotations ----
+function mkAnnotations(key) {
+  if (!showThresholds) return {};
+  const t = thresholds[key];
+  const mkLine = (val) => ({
+    type: 'line', yMin: val, yMax: val,
+    borderColor: '#fbbf24', borderWidth: 1.5, borderDash: [6, 3]
+  });
+  return { minLine: mkLine(t.min), maxLine: mkLine(t.max) };
+}
+
+// ---- Chart options ----
+function baseOpts(yLabel, annotKey) {
   return {
     responsive: true,
     maintainAspectRatio: true,
@@ -149,23 +197,20 @@ function baseOpts(yLabel) {
     plugins: {
       legend: { labels: { color:'#9ca3af', boxWidth:12, font:{size:11} } },
       tooltip: {
-        mode: 'index',
-        intersect: false,
-        backgroundColor: '#111827',
-        borderColor: '#374151',
-        borderWidth: 1,
-        titleColor: '#9ca3af',
-        bodyColor: '#e5e7eb',
-        padding: 10,
+        mode: 'index', intersect: false,
+        backgroundColor: '#111827', borderColor: '#374151', borderWidth: 1,
+        titleColor: '#9ca3af', bodyColor: '#e5e7eb', padding: 10,
         callbacks: {
           title: (items) => items[0].label,
           label: (item)  => ' ' + item.dataset.label + ': ' + item.formattedValue
         }
-      }
+      },
+      annotation: { annotations: annotKey ? mkAnnotations(annotKey) : {} }
     },
     scales: {
       x: { ticks:{ color:'#6b7280', font:{size:10}, maxTicksLimit:10 }, grid:{ color:'#1f2937' } },
       y: {
+        min: 0,
         ticks: { color:'#9ca3af', font:{size:11} },
         grid:  { color:'#1f2937' },
         title: { display: !!yLabel, text: yLabel||'', color:'#6b7280', font:{size:10} }
@@ -176,15 +221,20 @@ function baseOpts(yLabel) {
 
 function mkLabels(n) {
   return Array.from({length:n}, (_,i) => {
-    const sAgo = (n - 1 - i) * 15;
-    if (sAgo === 0)     return 'now';
-    if (sAgo < 60)      return '-' + sAgo + 's';
-    if (sAgo < 3600)    return '-' + Math.round(sAgo/60) + 'm';
-    return '-' + (sAgo/3600).toFixed(1) + 'h';
+    const s = (n - 1 - i) * 15;
+    if (s === 0)  return 'now';
+    if (s < 60)   return '-' + s + 's';
+    if (s < 3600) return '-' + Math.round(s/60) + 'm';
+    return '-' + (s/3600).toFixed(1) + 'h';
   });
 }
 
 function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+function ds(label, data, color) {
+  return { label, data, borderColor:color, backgroundColor:color+'22',
+           tension:.3, pointRadius:2, pointHoverRadius:6, fill:true, borderWidth:2 };
+}
 
 // ---- Sensors ----
 async function refreshSensors() {
@@ -192,7 +242,7 @@ async function refreshSensors() {
     const d = await fetch('/sensors').then(r => r.json());
     document.getElementById('v-ph').textContent   = d.ph.toFixed(2);
     document.getElementById('v-ec').textContent   = d.ec.toFixed(2);
-    document.getElementById('v-temp').textContent = d.temp.toFixed(1);
+    document.getElementById('v-temp').textContent = (d.temp * 9/5 + 32).toFixed(1);
     document.getElementById('v-hum').textContent  = d.humidity >= 0 ? d.humidity.toFixed(1) : '--';
   } catch(e) {}
 }
@@ -206,11 +256,8 @@ async function refreshPumps() {
     const grid = document.getElementById('pump-grid');
     grid.innerHTML = '';
     for (const [name, info] of Object.entries(d)) {
-      if (info.state && info.remainingMs > 0)
-        pumpStopAt[name] = Date.now() + info.remainingMs;
-      else if (!info.state)
-        delete pumpStopAt[name];
-
+      if (info.state && info.remainingMs > 0) pumpStopAt[name] = Date.now() + info.remainingMs;
+      else if (!info.state) delete pumpStopAt[name];
       const card = document.createElement('div');
       card.className = 'pump-card' + (info.state ? ' on' : '');
       card.innerHTML =
@@ -226,10 +273,8 @@ async function refreshPumps() {
 }
 
 async function dose(btn) {
-  const name   = btn.dataset.n;
-  const action = btn.dataset.a;
-  const safe   = name.toLowerCase().replace(/ /g, '');
-  await fetch('/dose?id=' + safe + '&action=' + action);
+  const name = btn.dataset.n, action = btn.dataset.a;
+  await fetch('/dose?id=' + name.toLowerCase().replace(/ /g,'') + '&action=' + action);
   if (action === 'on') pumpStopAt[name] = Date.now() + AUTO_OFF_MS;
   else delete pumpStopAt[name];
   refreshPumps();
@@ -238,29 +283,18 @@ async function dose(btn) {
 function tickTimers() {
   const now = Date.now();
   for (const [name, stopAt] of Object.entries(pumpStopAt)) {
-    const el  = document.getElementById('t-' + name.replace(/ /g, '_'));
+    const el = document.getElementById('t-' + name.replace(/ /g,'_'));
     if (!el) continue;
     const rem = stopAt - now;
-    if (rem > 0) {
-      el.textContent = 'Auto-off: ' + Math.ceil(rem / 1000) + 's';
-    } else {
-      el.textContent = '';
-      delete pumpStopAt[name];
-      refreshPumps();
-    }
+    if (rem > 0) { el.textContent = 'Auto-off: ' + Math.ceil(rem/1000) + 's'; }
+    else { el.textContent = ''; delete pumpStopAt[name]; refreshPumps(); }
   }
 }
-
 setInterval(tickTimers, 500);
 setInterval(refreshPumps, 10000);
 refreshPumps();
 
 // ---- Charts ----
-function ds(label, data, color) {
-  return { label, data, borderColor:color, backgroundColor:color+'22',
-           tension:.3, pointRadius:2, pointHoverRadius:6, fill:true, borderWidth:2 };
-}
-
 function renderCombined(d) {
   destroyChart('all');
   const ctx = document.getElementById('ch-all').getContext('2d');
@@ -269,22 +303,22 @@ function renderCombined(d) {
     data: {
       labels: mkLabels(d.ph.length),
       datasets: [
-        ds('pH',      d.ph,       COLORS.ph),
-        ds('EC',      d.ec,       COLORS.ec),
-        ds('Temp',    d.temp,     COLORS.temp),
-        ds('Humidity',d.humidity, COLORS.hum)
+        ds('pH',       d.ph,       COLORS.ph),
+        ds('TDS',      d.ec,       COLORS.ec),
+        ds('Temp(F)',  d.temp,     COLORS.temp),
+        ds('Humidity', d.humidity, COLORS.hum)
       ]
     },
-    options: baseOpts()
+    options: baseOpts(null, null)
   });
 }
 
 function renderSeparate(d) {
   const sets = [
-    { id:'ph',   label:'pH',          data:d.ph,       color:COLORS.ph,   canvas:'ch-ph'   },
-    { id:'ec',   label:'TDS / EC',    data:d.ec,       color:COLORS.ec,   canvas:'ch-ec'   },
-    { id:'temp', label:'Temperature', data:d.temp,     color:COLORS.temp, canvas:'ch-temp' },
-    { id:'hum',  label:'Humidity',    data:d.humidity, color:COLORS.hum,  canvas:'ch-hum'  }
+    { id:'ph',   label:'pH',        data:d.ph,       color:COLORS.ph,   canvas:'ch-ph',   ak:'ph'   },
+    { id:'ec',   label:'TDS (ppm)', data:d.ec,       color:COLORS.ec,   canvas:'ch-ec',   ak:'ec'   },
+    { id:'temp', label:'Temp (F)',  data:d.temp,     color:COLORS.temp, canvas:'ch-temp', ak:'temp' },
+    { id:'hum',  label:'Humidity',  data:d.humidity, color:COLORS.hum,  canvas:'ch-hum',  ak:'hum'  }
   ];
   for (const s of sets) {
     destroyChart(s.id);
@@ -292,22 +326,21 @@ function renderSeparate(d) {
     charts[s.id] = new Chart(ctx, {
       type: 'line',
       data: { labels: mkLabels(s.data.length), datasets: [ds(s.label, s.data, s.color)] },
-      options: baseOpts(s.label)
+      options: baseOpts(s.label, s.ak)
     });
   }
 }
 
 async function loadHistory() {
   try {
-    const raw = await fetch('/history').then(r => r.json());
-    // Only slice the valid portion — avoids showing leading zeros before data starts
+    const raw   = await fetch('/history').then(r => r.json());
     const count = Math.min(raw.count || 0, raw.ph.length);
     const tail  = (arr) => arr.slice(arr.length - count);
     histData = {
-      ph:       tail(raw.ph),
-      ec:       tail(raw.ec),
-      temp:     tail(raw.temp),
-      humidity: tail(raw.humidity),
+      ph:          tail(raw.ph),
+      ec:          tail(raw.ec),
+      temp:        toFArr(tail(raw.temp)),   // convert °C -> °F
+      humidity:    tail(raw.humidity),
       currentWeek: raw.currentWeek
     };
     if (viewMode === 'c') renderCombined(histData);
@@ -321,13 +354,28 @@ function setView(v) {
   document.getElementById('btn-s').classList.toggle('active', v === 's');
   document.getElementById('view-c').style.display = v === 'c' ? 'block' : 'none';
   document.getElementById('view-s').style.display = v === 's' ? 'block' : 'none';
-  if (histData) {
-    if (v === 'c') renderCombined(histData);
-    else           renderSeparate(histData);
+  if (histData) { if (v === 'c') renderCombined(histData); else renderSeparate(histData); }
+}
+
+// ---- Thresholds ----
+function toggleThresholds() {
+  showThresholds = !showThresholds;
+  const btn = document.getElementById('btn-thresh');
+  btn.classList.toggle('active', showThresholds);
+  btn.textContent = 'Thresholds: ' + (showThresholds ? 'ON' : 'OFF');
+  document.getElementById('thresh-panel').style.display = showThresholds ? 'block' : 'none';
+  if (histData) { if (viewMode === 'c') renderCombined(histData); else renderSeparate(histData); }
+}
+
+function updateThreshold(key) {
+  thresholds[key].min = parseFloat(document.getElementById('th-' + key + '-min').value);
+  thresholds[key].max = parseFloat(document.getElementById('th-' + key + '-max').value);
+  if (showThresholds && histData) {
+    if (viewMode === 'c') renderCombined(histData); else renderSeparate(histData);
   }
 }
 
-setInterval(loadHistory, 15000); // match the 15s record interval
+setInterval(loadHistory, 15000);
 loadHistory();
 </script>
 </body>
