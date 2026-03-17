@@ -6,6 +6,7 @@
 #include <Preferences.h>
 #include "WebInterface.h"
 #include "config.h"
+#include "TFT.h"
 
 // ------------------- WiFi -------------------
 const char* ssid = WIFI_SSID;
@@ -15,7 +16,8 @@ const char* password = WIFI_PASSWORD;
 WebServer server(80);
 
 // ------------------- Pumps -------------------
-NutrientPump pumps[]={{"Micro",19,false,0},{"Gro",21,false,0},{"Bloom",22,false,0},{"pH Up",23,false,0},{"pH Down",25,false,0}};
+// NOTE: Micro moved 19→12, pH Up moved 23→14 to free GPIO 19/23 for TFT SPI
+NutrientPump pumps[]={{"Micro",12,false,0},{"Gro",21,false,0},{"Bloom",22,false,0},{"pH Up",14,false,0},{"pH Down",25,false,0}};
 extern const int PUMP_COUNT = sizeof(pumps)/sizeof(pumps[0]);
 unsigned long pumpStopTimes[PUMP_COUNT] = {0};
 extern const unsigned long PUMP_AUTO_OFF_MS=30000;
@@ -215,10 +217,12 @@ void setup(){
     setupWebInterface(server);  // all routes registered in WebInterface.cpp
     server.begin();
     Serial.println("HTTP server started");
+    setupTFT();
 }
 
 // ------------------- Loop -------------------
 void loop(){
+    updateTFT();
     server.handleClient();
     unsigned long now=millis();
     for(int i=0;i<PUMP_COUNT;i++){
