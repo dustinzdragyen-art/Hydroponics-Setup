@@ -68,7 +68,9 @@ server.send_P(200, "text/html", R"HTML(
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#111827;color:#e5e7eb;padding:16px}
 h1{text-align:center;color:#34d399;margin-bottom:20px;font-size:22px;letter-spacing:.02em}
-h2{font-size:14px;color:#34d399;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid #1f2937;text-transform:uppercase;letter-spacing:.06em}
+h2{font-size:14px;color:#34d399;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid #1f2937;text-transform:uppercase;letter-spacing:.06em;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
+.sec-arrow{font-size:12px;color:#6b7280;transition:transform 0.2s;flex-shrink:0;margin-left:8px}
+.sec-arrow.closed{transform:rotate(-90deg)}
 .cards{display:flex;gap:6px;flex-wrap:nowrap;margin-bottom:4px}
 .card{flex:1;min-width:0;background:#1f2937;border-radius:12px;padding:10px 4px;text-align:center;border:1px solid #374151}
 .card-value{font-size:clamp(18px,5vw,32px);font-weight:700;color:#34d399;line-height:1.1}
@@ -175,8 +177,8 @@ canvas{max-height:220px}
   </div>
 </div>
 
-<h2>Recipe Manager</h2>
-<div class="recipe-mgr">
+<h2 onclick="toggleSection('sec-recipe-mgr')">Recipe Manager<span class="sec-arrow" id="arr-sec-recipe-mgr">&#9660;</span></h2>
+<div id="sec-recipe-mgr" class="recipe-mgr">
   <div class="rec-select-row">
     <select class="rec-select" id="rec-selector"></select>
     <button class="cal-btn" onclick="activateRecipe()">Activate</button>
@@ -206,8 +208,8 @@ canvas{max-height:220px}
   </div>
 </div>
 
-<h2>Recipe &amp; Usage</h2>
-<div class="recipe-panel">
+<h2 onclick="toggleSection('sec-recipe-usage')">Recipe &amp; Usage<span class="sec-arrow" id="arr-sec-recipe-usage">&#9660;</span></h2>
+<div id="sec-recipe-usage" class="recipe-panel">
   <div class="recipe-header">
     <span id="recipe-week-label">Week -- Recipe</span>
     <span class="recipe-flow">Flow: <input class="cal-input" id="flow-input" type="number" step="0.1" min="0.1" value="1.0"> ml/s <button class="cal-btn" onclick="setFlowRate()">Set</button></span>
@@ -223,11 +225,11 @@ canvas{max-height:220px}
   </div>
 </div>
 
-<h2>Pump Controls</h2>
-<div class="pump-grid" id="pump-grid"></div>
+<h2 onclick="toggleSection('sec-pumps')">Pump Controls<span class="sec-arrow" id="arr-sec-pumps">&#9660;</span></h2>
+<div id="sec-pumps"><div class="pump-grid" id="pump-grid"></div></div>
 
-<h2>Sensor Calibration</h2>
-<div class="cal-panel">
+<h2 onclick="toggleSection('sec-cal')">Sensor Calibration<span class="sec-arrow" id="arr-sec-cal">&#9660;</span></h2>
+<div id="sec-cal" class="cal-panel">
   <div style="font-size:12px;color:#34d399;font-weight:600;margin-bottom:10px">pH 3-Point Calibration</div>
   <div class="ph-cal-step">
     <span class="ph-cal-label">Step 1 &mdash; pH 4.0</span>
@@ -270,8 +272,8 @@ canvas{max-height:220px}
   </div>
 </div>
 
-<h2>Sensor History</h2>
-<div class="gtoggle">
+<h2 onclick="toggleSection('sec-history')">Sensor History<span class="sec-arrow" id="arr-sec-history">&#9660;</span></h2>
+<div id="sec-history"><div class="gtoggle">
   <button class="gtbtn active" id="btn-c"      onclick="setView('c')">Combined</button>
   <button class="gtbtn"        id="btn-s"      onclick="setView('s')">Separate</button>
   <button class="gtbtn"        id="btn-none"   onclick="setView('n')">Hide</button>
@@ -317,8 +319,17 @@ canvas{max-height:220px}
   <div class="chart-box"><h3>Temperature (&deg;F)</h3><canvas id="ch-temp"></canvas></div>
   <div class="chart-box"><h3>Humidity (%RH)</h3><canvas id="ch-hum"></canvas></div>
 </div>
+</div>
 
 <script>
+function toggleSection(id) {
+  const el  = document.getElementById(id);
+  const arr = document.getElementById('arr-' + id);
+  const collapsed = el.style.display === 'none';
+  el.style.display = collapsed ? '' : 'none';
+  arr.classList.toggle('closed', !collapsed);
+}
+
 const AUTO_OFF_MS = 30000;
 let pumpStopAt     = {};
 let histData       = null;
