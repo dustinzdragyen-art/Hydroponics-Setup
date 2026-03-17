@@ -14,6 +14,8 @@ struct GrowRecipe { char name[32]; int numWeeks; WeekDose weeks[16]; };
 
 void recordPumpStop(int i);
 void saveRecipeToNVS(int idx);
+int  rawPHReading();
+int  rawECReading();
 
 void setupWebInterface(WebServer &server);
 

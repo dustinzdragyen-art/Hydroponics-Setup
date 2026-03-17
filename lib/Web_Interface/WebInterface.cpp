@@ -35,7 +35,8 @@ extern const int HISTORY_SIZE;
 extern int currentWeek;
 extern int weekOffset;
 
-extern float phOffset, phMult, ecOffset, ecMult;
+extern float calRaw4, calRaw7, calRaw10;
+extern float ecRawLow, ecRawHigh;
 
 extern float pumpFlowRateMlPerSec;
 extern float pumpTotalMl[];
@@ -103,6 +104,10 @@ canvas{max-height:220px}
 .week-btn:hover{border-color:#34d399}
 .week-display{font-size:15px;font-weight:700;color:#e5e7eb;min-width:70px;text-align:center}
 .cal-panel{background:#0d1117;border:1px solid #374151;border-radius:8px;padding:14px;margin-bottom:14px}
+.ph-cal-step{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:10px;background:#1f2937;border-radius:6px;padding:8px 10px}
+.ph-cal-label{font-size:12px;color:#e5e7eb;font-weight:600;min-width:110px}
+.ph-cal-hint{font-size:11px;color:#6b7280;flex:1;min-width:120px}
+.ph-cal-status{font-size:13px;font-weight:700;min-width:40px;text-align:center}
 .cal-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
 .cal-row:last-child{margin-bottom:0}
 .cal-label{font-size:12px;color:#9ca3af;min-width:40px}
@@ -223,17 +228,45 @@ canvas{max-height:220px}
 
 <h2>Sensor Calibration</h2>
 <div class="cal-panel">
-  <div class="cal-row">
-    <span class="cal-label">pH</span>
-    Offset <input class="cal-input" type="number" id="cal-ph-offset" step="0.01" value="0">
-    &times; Mult <input class="cal-input" type="number" id="cal-ph-mult" step="0.01" value="1">
-    <button class="cal-btn" onclick="applyCal('ph')">Apply</button>
+  <div style="font-size:12px;color:#34d399;font-weight:600;margin-bottom:10px">pH 3-Point Calibration</div>
+  <div class="ph-cal-step">
+    <span class="ph-cal-label">Step 1 &mdash; pH 4.0</span>
+    <span class="ph-cal-hint">Place probe in pH 4 buffer, then start</span>
+    <button class="cal-btn" id="cal-start-4" onclick="startCalStep(4)">Start</button>
+    <span class="ph-cal-status" id="cal-status-4">&mdash;</span>
   </div>
-  <div class="cal-row">
-    <span class="cal-label">EC</span>
-    Offset <input class="cal-input" type="number" id="cal-ec-offset" step="0.01" value="0">
-    &times; Mult <input class="cal-input" type="number" id="cal-ec-mult" step="0.01" value="1">
-    <button class="cal-btn" onclick="applyCal('ec')">Apply</button>
+  <div class="ph-cal-step">
+    <span class="ph-cal-label">Step 2 &mdash; pH 7.0</span>
+    <span class="ph-cal-hint">Place probe in pH 7 buffer, then start</span>
+    <button class="cal-btn" id="cal-start-7" onclick="startCalStep(7)">Start</button>
+    <span class="ph-cal-status" id="cal-status-7">&mdash;</span>
+  </div>
+  <div class="ph-cal-step">
+    <span class="ph-cal-label">Step 3 &mdash; pH 10.0</span>
+    <span class="ph-cal-hint">Place probe in pH 10 buffer, then start</span>
+    <button class="cal-btn" id="cal-start-10" onclick="startCalStep(10)">Start</button>
+    <span class="ph-cal-status" id="cal-status-10">&mdash;</span>
+  </div>
+  <div style="margin-top:10px">
+    <button class="cal-btn" style="color:#ef4444;border-color:#ef4444" onclick="clearPhCal()">Reset pH Cal</button>
+  </div>
+  <div style="margin-top:14px;border-top:1px solid #374151;padding-top:12px">
+    <div style="font-size:12px;color:#34d399;font-weight:600;margin-bottom:10px">EC 2-Point Calibration</div>
+    <div class="ph-cal-step">
+      <span class="ph-cal-label">Step 1 &mdash; 1413 &micro;S/cm</span>
+      <span class="ph-cal-hint">Place probe in 1413 µS/cm solution, then start</span>
+      <button class="cal-btn" id="cal-start-eclo" onclick="startECStep('lo')">Start</button>
+      <span class="ph-cal-status" id="cal-status-eclo">&mdash;</span>
+    </div>
+    <div class="ph-cal-step">
+      <span class="ph-cal-label">Step 2 &mdash; 2764 &micro;S/cm</span>
+      <span class="ph-cal-hint">Place probe in 2764 µS/cm solution, then start</span>
+      <button class="cal-btn" id="cal-start-echi" onclick="startECStep('hi')">Start</button>
+      <span class="ph-cal-status" id="cal-status-echi">&mdash;</span>
+    </div>
+    <div style="margin-top:10px">
+      <button class="cal-btn" style="color:#ef4444;border-color:#ef4444" onclick="clearECCal()">Reset EC Cal</button>
+    </div>
   </div>
 </div>
 
@@ -695,16 +728,54 @@ async function commitWeek() {
 async function loadCalibration() {
   try {
     const d = await fetch('/calibration').then(r => r.json());
-    document.getElementById('cal-ph-offset').value = d.ph.offset;
-    document.getElementById('cal-ph-mult').value   = d.ph.mult;
-    document.getElementById('cal-ec-offset').value = d.ec.offset;
-    document.getElementById('cal-ec-mult').value   = d.ec.mult;
+    setCalStatus('cal-status-4',    d.ph.cal4);
+    setCalStatus('cal-status-7',    d.ph.cal7);
+    setCalStatus('cal-status-10',   d.ph.cal10);
+    setCalStatus('cal-status-eclo', d.ec.calLo);
+    setCalStatus('cal-status-echi', d.ec.calHi);
   } catch(e) {}
 }
-async function applyCal(sensor) {
-  const offset = parseFloat(document.getElementById('cal-'+sensor+'-offset').value)||0;
-  const mult   = parseFloat(document.getElementById('cal-'+sensor+'-mult').value)||1;
-  await fetch('/calibrate?sensor='+sensor+'&offset='+offset+'&mult='+mult);
+function setCalStatus(id, done) {
+  const el = document.getElementById(id);
+  el.textContent = done ? '\u2713' : '\u2014';
+  el.style.color = done ? '#34d399' : '#6b7280';
+}
+function runCalCountdown(btnId, statusId, onDone) {
+  const btn = document.getElementById(btnId);
+  const status = document.getElementById(statusId);
+  btn.disabled = true;
+  let t = 60;
+  status.textContent = t + 's';
+  status.style.color = '#fbbf24';
+  const iv = setInterval(async () => {
+    t--;
+    if (t > 0) { status.textContent = t + 's'; }
+    else {
+      clearInterval(iv);
+      status.textContent = '...';
+      try { await onDone(); setCalStatus(statusId, true); }
+      catch(e) { status.textContent = 'ERR'; status.style.color = '#ef4444'; }
+      btn.disabled = false;
+    }
+  }, 1000);
+}
+function startCalStep(ph) {
+  runCalCountdown('cal-start-' + ph, 'cal-status-' + ph,
+    () => fetch('/takecal?ph=' + ph));
+}
+function startECStep(level) {
+  runCalCountdown('cal-start-ec' + level, 'cal-status-ec' + level,
+    () => fetch('/takeeccal?level=' + level));
+}
+async function clearPhCal() {
+  if (!confirm('Reset pH calibration?')) return;
+  await fetch('/clearcal');
+  ['cal-status-4','cal-status-7','cal-status-10'].forEach(id => setCalStatus(id, false));
+}
+async function clearECCal() {
+  if (!confirm('Reset EC calibration?')) return;
+  await fetch('/cleareccal');
+  ['cal-status-eclo','cal-status-echi'].forEach(id => setCalStatus(id, false));
 }
 loadCalibration();
 
@@ -845,22 +916,57 @@ if (!server.hasArg("week")) { server.send(400, "text/plain", "Missing week"); re
     // ---------------- Calibration GET ----------------
     server.on("/calibration", [&server]() {
         JsonDocument doc;
-        doc["ph"]["offset"] = phOffset; doc["ph"]["mult"] = phMult;
-        doc["ec"]["offset"] = ecOffset; doc["ec"]["mult"] = ecMult;
+        doc["ph"]["cal4"]  = (calRaw4  > 0);
+        doc["ph"]["cal7"]  = (calRaw7  > 0);
+        doc["ph"]["cal10"] = (calRaw10 > 0);
+        doc["ec"]["calLo"] = (ecRawLow  > 0);
+        doc["ec"]["calHi"] = (ecRawHigh > 0);
         String out; serializeJson(doc, out);
         server.send(200, "application/json", out);
     });
 
-    // ---------------- Calibration SET ----------------
-    server.on("/calibrate", [&server]() {
-        if (!server.hasArg("sensor")) { server.send(400, "text/plain", "Missing sensor"); return; }
-        String s  = server.arg("sensor");
-        float off = server.hasArg("offset") ? server.arg("offset").toFloat() : 0.0f;
-        float mul = server.hasArg("mult")   ? server.arg("mult").toFloat()   : 1.0f;
-        if (mul == 0.0f) mul = 1.0f;
-        if      (s == "ph") { phOffset = off; phMult = mul; }
-        else if (s == "ec") { ecOffset = off; ecMult = mul; }
-        else { server.send(400, "text/plain", "Unknown sensor, use ph or ec"); return; }
+    // ---------------- pH 3-Point Cal: Take Reading ----------------
+    server.on("/takecal", [&server]() {
+        if (!server.hasArg("ph")) { server.send(400, "text/plain", "Missing ph"); return; }
+        int ph = server.arg("ph").toInt();
+        float raw = (float)rawPHReading();
+        prefs.begin("hydro", false);
+        if      (ph == 4)  { calRaw4  = raw; prefs.putFloat("cal_raw4",  raw); }
+        else if (ph == 7)  { calRaw7  = raw; prefs.putFloat("cal_raw7",  raw); }
+        else if (ph == 10) { calRaw10 = raw; prefs.putFloat("cal_raw10", raw); }
+        else { prefs.end(); server.send(400, "text/plain", "ph must be 4, 7, or 10"); return; }
+        prefs.end();
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- pH Cal Reset ----------------
+    server.on("/clearcal", [&server]() {
+        calRaw4 = calRaw7 = calRaw10 = 0;
+        prefs.begin("hydro", false);
+        prefs.putFloat("cal_raw4", 0); prefs.putFloat("cal_raw7", 0); prefs.putFloat("cal_raw10", 0);
+        prefs.end();
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- EC 2-Point Cal: Take Reading ----------------
+    server.on("/takeeccal", [&server]() {
+        if (!server.hasArg("level")) { server.send(400, "text/plain", "Missing level"); return; }
+        String level = server.arg("level");
+        float raw = (float)rawECReading();
+        prefs.begin("hydro", false);
+        if (level == "lo") { ecRawLow  = raw; prefs.putFloat("ec_raw_lo", raw); }
+        else if (level == "hi") { ecRawHigh = raw; prefs.putFloat("ec_raw_hi", raw); }
+        else { prefs.end(); server.send(400, "text/plain", "level must be lo or hi"); return; }
+        prefs.end();
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- EC Cal Reset ----------------
+    server.on("/cleareccal", [&server]() {
+        ecRawLow = ecRawHigh = 0;
+        prefs.begin("hydro", false);
+        prefs.putFloat("ec_raw_lo", 0); prefs.putFloat("ec_raw_hi", 0);
+        prefs.end();
         server.send(200, "text/plain", "OK");
     });
 

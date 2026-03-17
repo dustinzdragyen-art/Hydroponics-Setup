@@ -39,9 +39,12 @@ static int adcAverage(uint8_t pin, int samples = 16) {
     return sum / samples;
 }
 
-// Calibration offsets and multipliers — adjustable via /calibrate endpoint
-float phOffset=0.0f, phMult=1.0f;
-float ecOffset=0.0f, ecMult=1.0f;
+// pH 3-point calibration — raw ADC readings at known pH buffers
+float calRaw4=0, calRaw7=0, calRaw10=0;
+
+// EC 2-point calibration — raw ADC at known µS/cm standards
+float ecRawLow=0, ecRawHigh=0;
+const float EC_STD_LOW=1413.0f, EC_STD_HIGH=2764.0f; // µS/cm
 
 // ------------------- Persistent Storage -------------------
 Preferences prefs;
@@ -52,15 +55,36 @@ float pumpTotalMl[5] = {0};  // lifetime ml per pump, saved to NVS
 float pumpWeekMl[5]  = {0};  // this-week ml per pump, saved to NVS
 int   lastSavedWeek  = 0;
 
+int rawPHReading() { return adcAverage(PH_PIN, 64); }
+
 float readPH() {
     int r = adcAverage(PH_PIN);
-    float raw = r * (3.3f / 4095.0f) * 3.5f;
-    return (raw + phOffset) * phMult;
+    if (calRaw4 > 0 && calRaw7 > 0 && calRaw10 > 0) {
+        // Piecewise linear interpolation using 3 calibration points
+        // Works regardless of whether the sensor has a positive or negative slope
+        float t;
+        if (calRaw4 > calRaw7) {  // higher ADC = lower pH (typical)
+            if (r >= calRaw7) { t = (float)(r - calRaw4) / (calRaw7 - calRaw4); return 4.0f + t * 3.0f; }
+            else               { t = (float)(r - calRaw7) / (calRaw10 - calRaw7); return 7.0f + t * 3.0f; }
+        } else {                  // lower ADC = lower pH (inverted)
+            if (r <= calRaw7) { t = (float)(r - calRaw4) / (calRaw7 - calRaw4); return 4.0f + t * 3.0f; }
+            else               { t = (float)(r - calRaw7) / (calRaw10 - calRaw7); return 7.0f + t * 3.0f; }
+        }
+    }
+    // Fallback: raw voltage estimate before calibration
+    return r * (3.3f / 4095.0f) * 3.5f;
 }
+int rawECReading() { return adcAverage(EC_PIN, 64); }
+
 float readEC() {
     int r = adcAverage(EC_PIN);
-    float raw = r * (3.3f / 4095.0f) * 2.0f;
-    return (raw + ecOffset) * ecMult;
+    if (ecRawLow > 0 && ecRawHigh > 0 && ecRawHigh != ecRawLow) {
+        // Linear interpolation between two calibration points
+        float t = (float)(r - ecRawLow) / (float)(ecRawHigh - ecRawLow);
+        return EC_STD_LOW + t * (EC_STD_HIGH - EC_STD_LOW);
+    }
+    // Fallback: raw voltage estimate
+    return r * (3.3f / 4095.0f) * 2.0f;
 }
 float readHumidity() { float h=dht.readHumidity();    return isnan(h) ? -1.0f : h; }
 float readTemp() {
@@ -165,6 +189,11 @@ void setup(){
         pumpTotalMl[i] = prefs.getFloat(("tot_"+String(i)).c_str(), 0.0f);
         pumpWeekMl[i]  = prefs.getFloat(("wk_" +String(i)).c_str(), 0.0f);
     }
+    calRaw4    = prefs.getFloat("cal_raw4",   0.0f);
+    calRaw7    = prefs.getFloat("cal_raw7",   0.0f);
+    calRaw10   = prefs.getFloat("cal_raw10",  0.0f);
+    ecRawLow   = prefs.getFloat("ec_raw_lo",  0.0f);
+    ecRawHigh  = prefs.getFloat("ec_raw_hi",  0.0f);
     prefs.end();
 
     loadRecipesFromNVS();
