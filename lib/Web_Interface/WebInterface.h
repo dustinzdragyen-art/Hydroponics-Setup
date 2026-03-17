@@ -9,9 +9,11 @@ struct NutrientPump {
     unsigned long onStartMillis;
 };
 
-struct Recipe { float micro, gro, bloom, phUp, phDown; };
+struct WeekDose  { float micro, gro, bloom; };
+struct GrowRecipe { char name[32]; int numWeeks; WeekDose weeks[16]; };
 
 void recordPumpStop(int i);
+void saveRecipeToNVS(int idx);
 
 void setupWebInterface(WebServer &server);
 

@@ -82,11 +82,9 @@ int currentWeek=1;
 int weekOffset=0;  // manual UI adjustment on top of NTP-computed week
 
 // ------------------- Growth Stage Recipes -------------------
-Recipe weekRecipes[12] = {
-    {5,3,1,0,0},{5,3,2,0,0},{6,4,2,0,0},{6,4,3,0,0}, // weeks 1-4
-    {7,5,4,0,0},{8,5,4,0,0},{8,6,4,0,0},{9,6,5,0,0}, // weeks 5-8
-    {10,7,5,0,0},{10,7,6,0,0},{11,8,6,0,0},{12,8,7,0,0} // weeks 9-12
-};
+GrowRecipe recipes[8];
+int numRecipes     = 0;
+int activeRecipeIdx = 0;
 
 // ------------------- Pump Stop Helper -------------------
 void recordPumpStop(int i) {
@@ -103,6 +101,46 @@ void recordPumpStop(int i) {
     pumps[i].onStartMillis = 0;
     digitalWrite(pumps[i].pin, LOW);
     pumpStopTimes[i]       = 0;
+}
+
+// ------------------- Recipe NVS Helpers -------------------
+void saveRecipeToNVS(int idx) {
+    JsonDocument doc;
+    doc["name"] = recipes[idx].name;
+    doc["n"]    = recipes[idx].numWeeks;
+    JsonArray wa = doc["w"].to<JsonArray>();
+    for (int w = 0; w < recipes[idx].numWeeks; w++) {
+        JsonArray row = wa.add<JsonArray>();
+        row.add(recipes[idx].weeks[w].micro);
+        row.add(recipes[idx].weeks[w].gro);
+        row.add(recipes[idx].weeks[w].bloom);
+    }
+    String s; serializeJson(doc, s);
+    prefs.begin("hydro", false);
+    prefs.putString(("rec_" + String(idx)).c_str(), s);
+    prefs.putInt("num_recs",   numRecipes);
+    prefs.putInt("active_rec", activeRecipeIdx);
+    prefs.end();
+}
+
+void loadRecipesFromNVS() {
+    prefs.begin("hydro", true);
+    numRecipes      = prefs.getInt("num_recs",   0);
+    activeRecipeIdx = prefs.getInt("active_rec", 0);
+    for (int idx = 0; idx < numRecipes; idx++) {
+        String s = prefs.getString(("rec_" + String(idx)).c_str(), "");
+        if (s.isEmpty()) continue;
+        JsonDocument doc; deserializeJson(doc, s);
+        strlcpy(recipes[idx].name, doc["name"] | "Unnamed", 32);
+        recipes[idx].numWeeks = doc["n"] | 1;
+        JsonArray wa = doc["w"].as<JsonArray>();
+        for (int w = 0; w < recipes[idx].numWeeks && w < 16; w++) {
+            recipes[idx].weeks[w].micro = wa[w][0] | 0.0f;
+            recipes[idx].weeks[w].gro   = wa[w][1] | 0.0f;
+            recipes[idx].weeks[w].bloom = wa[w][2] | 0.0f;
+        }
+    }
+    prefs.end();
 }
 
 // ------------------- Setup -------------------
@@ -128,6 +166,22 @@ void setup(){
         pumpWeekMl[i]  = prefs.getFloat(("wk_" +String(i)).c_str(), 0.0f);
     }
     prefs.end();
+
+    loadRecipesFromNVS();
+    if (numRecipes == 0) {
+        numRecipes = 1;
+        strlcpy(recipes[0].name, "Default", 32);
+        recipes[0].numWeeks = 12;
+        float def[12][3] = {
+            {5,3,1},{5,3,2},{6,4,2},{6,4,3},
+            {7,5,4},{8,5,4},{8,6,4},{9,6,5},
+            {10,7,5},{10,7,6},{11,8,6},{12,8,7}
+        };
+        for (int w = 0; w < 12; w++)
+            recipes[0].weeks[w] = {def[w][0], def[w][1], def[w][2]};
+        saveRecipeToNVS(0);
+    }
+
     for(int i=0;i<PUMP_COUNT;i++){pinMode(pumps[i].pin,OUTPUT); digitalWrite(pumps[i].pin,LOW);}
     setupWebInterface(server);  // all routes registered in WebInterface.cpp
     server.begin();
@@ -169,7 +223,7 @@ void loop(){
         time_t now_t = time(nullptr);
         if(now_t > 100000){
             int ntpWeek = (int)((now_t - (time_t)GROW_START_EPOCH) / (7L * 86400L)) + 1 + weekOffset;
-            currentWeek = constrain(ntpWeek, 1, 12);
+            currentWeek = constrain(ntpWeek, 1, recipes[activeRecipeIdx].numWeeks);
         }
 
         // Reset weekly ml totals when the week advances
@@ -194,8 +248,8 @@ void loop(){
             pumpStopTimes[i] = now + PUMP_AUTO_OFF_MS;
         };
 
-        int week = constrain(currentWeek, 1, 12);
-        Recipe current = weekRecipes[week - 1];
+        int week = constrain(currentWeek, 1, recipes[activeRecipeIdx].numWeeks);
+        WeekDose current = recipes[activeRecipeIdx].weeks[week - 1];
 
         // pH correction takes priority over nutrients
         float ph = readPH();

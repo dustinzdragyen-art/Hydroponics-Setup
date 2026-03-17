@@ -40,8 +40,11 @@ extern float phOffset, phMult, ecOffset, ecMult;
 extern float pumpFlowRateMlPerSec;
 extern float pumpTotalMl[];
 extern float pumpWeekMl[];
-extern Recipe weekRecipes[];
 extern Preferences prefs;
+
+extern GrowRecipe recipes[];
+extern int numRecipes;
+extern int activeRecipeIdx;
 
 // =====================================================
 // Web Interface Setup
@@ -65,10 +68,10 @@ server.send_P(200, "text/html", R"HTML(
 body{font-family:system-ui,sans-serif;background:#111827;color:#e5e7eb;padding:16px}
 h1{text-align:center;color:#34d399;margin-bottom:20px;font-size:22px;letter-spacing:.02em}
 h2{font-size:14px;color:#34d399;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid #1f2937;text-transform:uppercase;letter-spacing:.06em}
-.cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px}
-.card{flex:1;min-width:100px;background:#1f2937;border-radius:12px;padding:14px 10px;text-align:center;border:1px solid #374151}
+.cards{display:flex;gap:6px;flex-wrap:nowrap;margin-bottom:4px}
+.card{flex:1;min-width:0;background:#1f2937;border-radius:12px;padding:10px 4px;text-align:center;border:1px solid #374151}
+.card-value{font-size:clamp(18px,5vw,32px);font-weight:700;color:#34d399;line-height:1.1}
 .card-label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
-.card-value{font-size:32px;font-weight:700;color:#34d399;line-height:1.1}
 .card-unit{font-size:10px;color:#4b5563;margin-top:3px}
 .pump-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px}
 .pump-card{background:#1f2937;border-radius:10px;padding:12px;border:2px solid #374151;transition:border-color .2s}
@@ -95,7 +98,7 @@ canvas{max-height:220px}
 .status-bar{display:flex;gap:12px;flex-wrap:wrap;background:#0d1117;border:1px solid #374151;border-radius:8px;padding:10px 14px;margin-bottom:14px}
 .status-item{font-size:11px;color:#6b7280}
 .status-item span{color:#9ca3af;font-weight:600}
-.week-ctrl{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.week-ctrl{display:flex;align-items:center;gap:10px;margin-bottom:8px;margin-top:4px}
 .week-btn{background:#1f2937;color:#34d399;border:1px solid #374151;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:18px;font-weight:700}
 .week-btn:hover{border-color:#34d399}
 .week-display{font-size:15px;font-weight:700;color:#e5e7eb;min-width:70px;text-align:center}
@@ -118,6 +121,21 @@ canvas{max-height:220px}
 .usage-table td{color:#e5e7eb;padding:5px 8px;border-bottom:1px solid #1f2937}
 .usage-table tr:last-child td{border-bottom:none}
 .reset-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.recipe-mgr{background:#0d1117;border:1px solid #374151;border-radius:8px;padding:14px;margin-bottom:14px}
+.rec-select-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.rec-select{background:#1f2937;border:1px solid #374151;border-radius:6px;color:#e5e7eb;padding:6px 10px;font-size:13px;flex:1;min-width:140px}
+.rec-name-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.week-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:nowrap;background:#1f2937;border-radius:6px;padding:6px 8px}
+.week-row-label{font-size:11px;color:#6b7280;min-width:46px;font-weight:600;flex-shrink:0}
+.wk-field{display:flex;flex-direction:column;align-items:center;gap:2px;flex:1;min-width:0}
+.week-field-label{font-size:9px;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em}
+.wk-field .cal-input{width:100%;min-width:0;padding:4px 4px;text-align:center}
+.sig-bars{display:inline-flex;align-items:flex-end;gap:2px;height:13px;vertical-align:middle;margin-right:2px}
+.sig-b{display:inline-block;width:4px;background:#374151;border-radius:1px}
+.b1{height:5px}.b2{height:9px}.b3{height:13px}
+.sig-bars.sig-3 .sig-b{background:#34d399}
+.sig-bars.sig-2 .b1,.sig-bars.sig-2 .b2{background:#fbbf24}
+.sig-bars.sig-1 .b1{background:#ef4444}
 </style>
 </head>
 <body>
@@ -125,9 +143,9 @@ canvas{max-height:220px}
 
 <div class="status-bar">
   <div class="status-item">Uptime: <span id="st-uptime">--</span></div>
-  <div class="status-item">WiFi: <span id="st-rssi">--</span> dBm</div>
+  <div class="status-item"><span class="sig-bars" id="st-wifi-icon"><span class="sig-b b1"></span><span class="sig-b b2"></span><span class="sig-b b3"></span></span> WiFi: <span id="st-rssi">--</span> dBm</div>
   <div class="status-item">Week: <span id="st-week">--</span></div>
-  <div class="status-item">Free Heap: <span id="st-heap">--</span> B</div>
+  <div class="status-item">Available Storage: <span id="st-heap">--</span> B</div>
 </div>
 
 <div class="cards">
@@ -141,7 +159,7 @@ canvas{max-height:220px}
     <div class="card-unit">ppm</div>
   </div>
   <div class="card">
-    <div class="card-label">Temperature</div>
+    <div class="card-label">Temp</div>
     <div class="card-value" id="v-temp">--</div>
     <div class="card-unit">&deg;F</div>
   </div>
@@ -152,11 +170,35 @@ canvas{max-height:220px}
   </div>
 </div>
 
-<h2>Growth Week</h2>
-<div class="week-ctrl">
-  <button class="week-btn" onclick="changeWeek(-1)">&#8722;</button>
-  <span class="week-display" id="week-display">Week --</span>
-  <button class="week-btn" onclick="changeWeek(+1)">&#43;</button>
+<h2>Recipe Manager</h2>
+<div class="recipe-mgr">
+  <div class="rec-select-row">
+    <select class="rec-select" id="rec-selector"></select>
+    <button class="cal-btn" onclick="activateRecipe()">Activate</button>
+    <button class="cal-btn" onclick="editRecipe()">Edit</button>
+    <button class="cal-btn" style="color:#ef4444;border-color:#ef4444" onclick="deleteRecipe()">Delete</button>
+    <button class="cal-btn" onclick="newRecipe()">+ New</button>
+  </div>
+  <div class="week-ctrl">
+    <button class="week-btn" onclick="changeWeek(-1)">&#8722;</button>
+    <span class="week-display" id="week-display">Week --</span>
+    <button class="week-btn" onclick="changeWeek(+1)">&#43;</button>
+    <button class="cal-btn" onclick="commitWeek()">Update</button>
+  </div>
+  <div id="rec-editor" style="display:none">
+    <div class="rec-name-row">
+      <span class="cal-label">Name</span>
+      <input class="cal-input" id="rec-name" type="text" placeholder="My Recipe" style="width:160px">
+      <input type="hidden" id="rec-edit-idx" value="-1">
+    </div>
+    <div id="rec-weeks-container"></div>
+    <div class="reset-row" style="margin-top:10px">
+      <button class="cal-btn" onclick="addWeek()">+ Add Week</button>
+      <button class="cal-btn" onclick="removeWeek()">&#8722; Remove Week</button>
+      <button class="cal-btn" style="background:#34d399;color:#111827;border-color:#34d399" onclick="saveRecipe()">Save Recipe</button>
+      <button class="cal-btn" onclick="cancelEdit()">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <h2>Recipe &amp; Usage</h2>
@@ -199,6 +241,7 @@ canvas{max-height:220px}
 <div class="gtoggle">
   <button class="gtbtn active" id="btn-c"      onclick="setView('c')">Combined</button>
   <button class="gtbtn"        id="btn-s"      onclick="setView('s')">Separate</button>
+  <button class="gtbtn"        id="btn-none"   onclick="setView('n')">Hide</button>
   <button class="gtbtn"        id="btn-thresh" onclick="toggleThresholds()">Thresholds: OFF</button>
 </div>
 
@@ -451,9 +494,11 @@ function setView(v) {
   viewMode = v;
   document.getElementById('btn-c').classList.toggle('active', v === 'c');
   document.getElementById('btn-s').classList.toggle('active', v === 's');
+  document.getElementById('btn-none').classList.toggle('active', v === 'n');
   document.getElementById('view-c').style.display = v === 'c' ? 'block' : 'none';
   document.getElementById('view-s').style.display = v === 's' ? 'block' : 'none';
-  if (histData) { if (v === 'c') renderCombined(histData); else renderSeparate(histData); }
+  if (v === 'c' && histData) renderCombined(histData);
+  else if (v === 's' && histData) renderSeparate(histData);
 }
 
 // ---- Thresholds ----
@@ -474,18 +519,119 @@ function updateThreshold(key) {
   }
 }
 
+// ---- Recipe Manager ----
+let recipeList = [];
+let editWeeks  = [];
+
+async function loadRecipes() {
+  try {
+    recipeList = await fetch('/recipes').then(r => r.json());
+    const sel = document.getElementById('rec-selector');
+    sel.innerHTML = '';
+    for (const r of recipeList) {
+      const opt = document.createElement('option');
+      opt.value = r.idx;
+      opt.textContent = r.name + (r.active ? ' \u2713' : '');
+      if (r.active) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  } catch(e) {}
+}
+
+async function activateRecipe() {
+  const idx = document.getElementById('rec-selector').value;
+  await fetch('/selectrecipe?idx=' + idx, {method:'POST'});
+  await fetch('/resetml?which=week');
+  loadRecipes(); refreshRecipe();
+}
+
+async function deleteRecipe() {
+  const idx = document.getElementById('rec-selector').value;
+  const name = (recipeList.find(r => r.idx == idx) || {}).name || 'this recipe';
+  if (!confirm('Delete "' + name + '"?')) return;
+  await fetch('/deleterecipe?idx=' + idx, {method:'POST'});
+  loadRecipes(); refreshRecipe();
+}
+
+function newRecipe() {
+  document.getElementById('rec-edit-idx').value = -1;
+  document.getElementById('rec-name').value = '';
+  editWeeks = [{micro:0,gro:0,bloom:0}];
+  renderWeekEditor();
+  document.getElementById('rec-editor').style.display = 'block';
+}
+
+async function editRecipe() {
+  const idx = document.getElementById('rec-selector').value;
+  try {
+    const d = await fetch('/getrecipe?idx=' + idx).then(r => r.json());
+    document.getElementById('rec-edit-idx').value = d.idx;
+    document.getElementById('rec-name').value = d.name;
+    editWeeks = d.weeks.map(w => ({micro:w.micro, gro:w.gro, bloom:w.bloom}));
+    renderWeekEditor();
+    document.getElementById('rec-editor').style.display = 'block';
+  } catch(e) {}
+}
+
+function renderWeekEditor() {
+  const c = document.getElementById('rec-weeks-container');
+  c.innerHTML = '';
+  for (let i = 0; i < editWeeks.length; i++) {
+    const w = editWeeks[i];
+    c.innerHTML +=
+      '<div class="week-row">' +
+      '<span class="week-row-label">Wk ' + (i+1) + '</span>' +
+      '<div class="wk-field"><span class="week-field-label">Micro</span><input class="cal-input" type="number" step="0.1" id="wk'+i+'micro" value="'+w.micro+'"></div>' +
+      '<div class="wk-field"><span class="week-field-label">Gro</span><input class="cal-input" type="number" step="0.1" id="wk'+i+'gro" value="'+w.gro+'"></div>' +
+      '<div class="wk-field"><span class="week-field-label">Bloom</span><input class="cal-input" type="number" step="0.1" id="wk'+i+'bloom" value="'+w.bloom+'"></div>' +
+      '</div>';
+  }
+}
+
+function addWeek() {
+  if (editWeeks.length >= 16) return;
+  const last = editWeeks[editWeeks.length - 1] || {micro:0,gro:0,bloom:0};
+  editWeeks.push(Object.assign({}, last));
+  renderWeekEditor();
+}
+
+function removeWeek() {
+  if (editWeeks.length <= 1) return;
+  editWeeks.pop();
+  renderWeekEditor();
+}
+
+async function saveRecipe() {
+  const idx  = document.getElementById('rec-edit-idx').value;
+  const name = document.getElementById('rec-name').value || 'Unnamed';
+  const nw   = editWeeks.length;
+  let params = 'idx=' + idx + '&name=' + encodeURIComponent(name) + '&numweeks=' + nw;
+  for (let i = 0; i < nw; i++) {
+    params += '&w'+i+'micro=' + (parseFloat(document.getElementById('wk'+i+'micro').value)||0);
+    params += '&w'+i+'gro='   + (parseFloat(document.getElementById('wk'+i+'gro').value)||0);
+    params += '&w'+i+'bloom=' + (parseFloat(document.getElementById('wk'+i+'bloom').value)||0);
+  }
+  await fetch('/saverecipe?' + params, {method:'POST'});
+  cancelEdit();
+  loadRecipes(); refreshRecipe();
+}
+
+function cancelEdit() {
+  document.getElementById('rec-editor').style.display = 'none';
+}
+
+loadRecipes();
+
 // ---- Recipe & Usage ----
 async function refreshRecipe() {
   try {
     const d = await fetch('/recipe').then(r => r.json());
-    document.getElementById('recipe-week-label').textContent = 'Week ' + d.week + ' Recipe';
+    document.getElementById('recipe-week-label').textContent = (d.recipeName || 'Recipe') + ' — Week ' + d.week;
     document.getElementById('flow-input').value = d.flowRate.toFixed(2);
     const rows = [
-      { name:'Micro',   target: d.recipe.micro  },
-      { name:'Gro',     target: d.recipe.gro    },
-      { name:'Bloom',   target: d.recipe.bloom  },
-      { name:'pH Up',   target: d.recipe.phUp   },
-      { name:'pH Down', target: d.recipe.phDown }
+      { name:'Micro', target: d.recipe.micro },
+      { name:'Gro',   target: d.recipe.gro   },
+      { name:'Bloom', target: d.recipe.bloom }
     ];
     const tbody = document.getElementById('usage-body');
     tbody.innerHTML = '';
@@ -524,15 +670,24 @@ async function refreshStatus() {
     document.getElementById('st-rssi').textContent   = d.rssi;
     document.getElementById('st-week').textContent   = d.week;
     document.getElementById('st-heap').textContent   = d.freeHeap.toLocaleString();
+    const rssi = d.rssi;
+    const sigClass = rssi >= -55 ? 'sig-3' : rssi >= -70 ? 'sig-2' : 'sig-1';
+    document.getElementById('st-wifi-icon').className = 'sig-bars ' + sigClass;
   } catch(e) {}
 }
 setInterval(refreshStatus, 10000); refreshStatus();
 
 // ---- Week control ----
-async function changeWeek(delta) {
-  const cur  = histData ? histData.currentWeek : 1;
-  const next = Math.max(1, Math.min(12, cur + delta));
-  await fetch('/setweek?week=' + next);
+let pendingWeek = null;
+function changeWeek(delta) {
+  const cur  = pendingWeek !== null ? pendingWeek : (histData ? histData.currentWeek : 1);
+  pendingWeek = Math.max(1, Math.min(16, cur + delta));
+  document.getElementById('week-display').textContent = 'Week ' + pendingWeek;
+}
+async function commitWeek() {
+  if (pendingWeek === null) return;
+  await fetch('/setweek?week=' + pendingWeek);
+  pendingWeek = null;
   loadHistory();
 }
 
@@ -712,15 +867,15 @@ if (!server.hasArg("week")) { server.send(400, "text/plain", "Missing week"); re
     // ---------------- Recipe & Usage ----------------
     server.on("/recipe", [&server]() {
         JsonDocument doc;
-        int week = constrain(currentWeek, 1, 12);
-        Recipe r = weekRecipes[week - 1];
-        doc["week"]              = week;
-        doc["recipe"]["micro"]   = r.micro;
-        doc["recipe"]["gro"]     = r.gro;
-        doc["recipe"]["bloom"]   = r.bloom;
-        doc["recipe"]["phUp"]    = r.phUp;
-        doc["recipe"]["phDown"]  = r.phDown;
-        doc["flowRate"]          = pumpFlowRateMlPerSec;
+        int maxWk = recipes[activeRecipeIdx].numWeeks;
+        int week  = constrain(currentWeek, 1, maxWk);
+        WeekDose r = recipes[activeRecipeIdx].weeks[week - 1];
+        doc["week"]            = week;
+        doc["recipeName"]      = recipes[activeRecipeIdx].name;
+        doc["recipe"]["micro"] = r.micro;
+        doc["recipe"]["gro"]   = r.gro;
+        doc["recipe"]["bloom"] = r.bloom;
+        doc["flowRate"]        = pumpFlowRateMlPerSec;
         JsonObject week_ml  = doc["weekMl"].to<JsonObject>();
         JsonObject total_ml = doc["totalMl"].to<JsonObject>();
         for (int i = 0; i < PUMP_COUNT; i++) {
@@ -751,6 +906,87 @@ if (!server.hasArg("week")) { server.send(400, "text/plain", "Missing week"); re
             if (which == "total") { pumpTotalMl[i] = 0; prefs.putFloat(("tot_"+String(i)).c_str(), 0.0f); }
             pumpWeekMl[i] = 0; prefs.putFloat(("wk_"+String(i)).c_str(), 0.0f);
         }
+        prefs.end();
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- Recipe Manager: List ----------------
+    server.on("/recipes", [&server]() {
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        for (int i = 0; i < numRecipes; i++) {
+            JsonObject o = arr.add<JsonObject>();
+            o["idx"]      = i;
+            o["name"]     = recipes[i].name;
+            o["numWeeks"] = recipes[i].numWeeks;
+            o["active"]   = (i == activeRecipeIdx);
+        }
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    // ---------------- Recipe Manager: Get One ----------------
+    server.on("/getrecipe", [&server]() {
+        int idx = server.hasArg("idx") ? server.arg("idx").toInt() : activeRecipeIdx;
+        if (idx < 0 || idx >= numRecipes) { server.send(404, "text/plain", "Not found"); return; }
+        JsonDocument doc;
+        doc["idx"]      = idx;
+        doc["name"]     = recipes[idx].name;
+        doc["numWeeks"] = recipes[idx].numWeeks;
+        JsonArray wa = doc["weeks"].to<JsonArray>();
+        for (int w = 0; w < recipes[idx].numWeeks; w++) {
+            JsonObject row = wa.add<JsonObject>();
+            row["micro"] = recipes[idx].weeks[w].micro;
+            row["gro"]   = recipes[idx].weeks[w].gro;
+            row["bloom"] = recipes[idx].weeks[w].bloom;
+        }
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    // ---------------- Recipe Manager: Save ----------------
+    server.on("/saverecipe", [&server]() {
+        int idx = server.hasArg("idx") ? server.arg("idx").toInt() : -1;
+        if (idx == -1) {
+            if (numRecipes >= 8) { server.send(400, "text/plain", "Max 8 recipes"); return; }
+            idx = numRecipes++;
+        }
+        if (idx < 0 || idx >= 8) { server.send(400, "text/plain", "Bad idx"); return; }
+        String name = server.hasArg("name") ? server.arg("name") : "Unnamed";
+        strlcpy(recipes[idx].name, name.c_str(), 32);
+        int nw = server.hasArg("numweeks") ? server.arg("numweeks").toInt() : 1;
+        nw = constrain(nw, 1, 16);
+        recipes[idx].numWeeks = nw;
+        for (int w = 0; w < nw; w++) {
+            recipes[idx].weeks[w].micro = server.arg("w"+String(w)+"micro").toFloat();
+            recipes[idx].weeks[w].gro   = server.arg("w"+String(w)+"gro").toFloat();
+            recipes[idx].weeks[w].bloom = server.arg("w"+String(w)+"bloom").toFloat();
+        }
+        saveRecipeToNVS(idx);
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- Recipe Manager: Activate ----------------
+    server.on("/selectrecipe", [&server]() {
+        int idx = server.arg("idx").toInt();
+        if (idx < 0 || idx >= numRecipes) { server.send(400, "text/plain", "Bad idx"); return; }
+        activeRecipeIdx = idx;
+        prefs.begin("hydro", false); prefs.putInt("active_rec", idx); prefs.end();
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- Recipe Manager: Delete ----------------
+    server.on("/deleterecipe", [&server]() {
+        int idx = server.arg("idx").toInt();
+        if (numRecipes <= 1) { server.send(400, "text/plain", "Cannot delete last recipe"); return; }
+        if (idx < 0 || idx >= numRecipes) { server.send(400, "text/plain", "Bad idx"); return; }
+        for (int i = idx; i < numRecipes - 1; i++) recipes[i] = recipes[i + 1];
+        numRecipes--;
+        if (activeRecipeIdx >= numRecipes) activeRecipeIdx = numRecipes - 1;
+        prefs.begin("hydro", false);
+        prefs.putInt("num_recs",   numRecipes);
+        prefs.putInt("active_rec", activeRecipeIdx);
+        prefs.remove(("rec_" + String(numRecipes)).c_str());
         prefs.end();
         server.send(200, "text/plain", "OK");
     });
