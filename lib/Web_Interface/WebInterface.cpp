@@ -76,15 +76,15 @@ h2{font-size:14px;color:#34d399;margin:22px 0 10px;padding-bottom:6px;border-bot
 .card-value{font-size:clamp(18px,5vw,32px);font-weight:700;color:#34d399;line-height:1.1}
 .card-label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
 .card-unit{font-size:10px;color:#4b5563;margin-top:3px}
-.pump-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px}
-.pump-card{background:#1f2937;border-radius:10px;padding:12px;border:2px solid #374151;transition:border-color .2s}
+.pump-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+.pump-card{background:#1f2937;border-radius:8px;padding:8px 10px;border:2px solid #374151;transition:border-color .2s}
 .pump-card.on{border-color:#34d399}
-.pump-name{font-size:13px;font-weight:600;color:#d1d5db;margin-bottom:8px}
-.pump-btns{display:flex;gap:6px}
-.btn-on,.btn-off{flex:1;padding:7px 0;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;transition:opacity .15s}
+.pump-name{font-size:11px;font-weight:600;color:#d1d5db;margin-bottom:6px}
+.pump-btns{display:flex;gap:4px}
+.btn-on,.btn-off{flex:1;padding:4px 0;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:700;transition:opacity .15s}
 .btn-on{background:#34d399;color:#111827}.btn-on:hover{opacity:.85}
 .btn-off{background:#ef4444;color:#fff}.btn-off:hover{opacity:.85}
-.pump-timer{font-size:11px;color:#34d399;margin-top:5px;min-height:15px}
+.pump-timer{font-size:10px;color:#34d399;margin-top:4px;min-height:13px}
 .gtoggle{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center}
 .gtbtn{background:#1f2937;color:#9ca3af;border:1px solid #374151;border-radius:6px;padding:7px 18px;cursor:pointer;font-size:12px;font-weight:600;transition:all .15s}
 .gtbtn.active{background:#34d399;color:#111827;border-color:#34d399}
@@ -701,7 +701,7 @@ async function newBatch() {
   loadHistory();
   refreshRecipe();
 }
-setInterval(refreshRecipe, 15000);
+setInterval(refreshRecipe, 3000);
 refreshRecipe();
 
 // ---- Status bar ----
@@ -733,6 +733,7 @@ async function commitWeek() {
   await fetch('/setweek?week=' + pendingWeek);
   pendingWeek = null;
   loadHistory();
+  refreshRecipe();
 }
 
 // ---- Calibration ----
@@ -916,7 +917,7 @@ JsonDocument doc;
     server.on("/setweek", [&server]() {
 if (!server.hasArg("week")) { server.send(400, "text/plain", "Missing week"); return; }
         int w = server.arg("week").toInt();
-        if (w < 1 || w > 12) { server.send(400, "text/plain", "Out of range 1-12"); return; }
+        if (w < 1 || w > recipes[activeRecipeIdx].numWeeks) { server.send(400, "text/plain", "Out of range"); return; }
         time_t now_t = time(nullptr);
         int ntpWeek = (int)((now_t - (time_t)GROW_START_EPOCH) / (7L * 86400L)) + 1;
         weekOffset = w - ntpWeek;
@@ -1088,7 +1089,21 @@ if (!server.hasArg("week")) { server.send(400, "text/plain", "Missing week"); re
         int idx = server.arg("idx").toInt();
         if (idx < 0 || idx >= numRecipes) { server.send(400, "text/plain", "Bad idx"); return; }
         activeRecipeIdx = idx;
-        prefs.begin("hydro", false); prefs.putInt("active_rec", idx); prefs.end();
+        // Reset grow week to 1 when activating a new recipe
+        currentWeek = 1;
+        time_t now_t = time(nullptr);
+        if (now_t > 100000) {
+            int ntpWeek = (int)((now_t - (time_t)GROW_START_EPOCH) / (7L * 86400L)) + 1;
+            weekOffset = 1 - ntpWeek;
+        } else {
+            weekOffset = 0;
+        }
+        // Reset this-week ml totals for fresh start
+        for (int i = 0; i < PUMP_COUNT; i++) pumpWeekMl[i] = 0;
+        prefs.begin("hydro", false);
+        prefs.putInt("active_rec", idx);
+        for (int i = 0; i < PUMP_COUNT; i++) prefs.putFloat(("wk_"+String(i)).c_str(), 0.0f);
+        prefs.end();
         server.send(200, "text/plain", "OK");
     });
 
