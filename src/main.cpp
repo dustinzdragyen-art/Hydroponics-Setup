@@ -2,6 +2,8 @@
 #include <WebServer.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
+#include <time.h>
+#include <Preferences.h>
 #include "WebInterface.h"
 #include "config.h"
 
@@ -37,8 +39,29 @@ static int adcAverage(uint8_t pin, int samples = 16) {
     return sum / samples;
 }
 
-float readPH()       { int r=adcAverage(PH_PIN);  return r*(3.3f/4095.0f)*3.5f; }
-float readEC()       { int r=adcAverage(EC_PIN);  return r*(3.3f/4095.0f)*2.0f; }
+// Calibration offsets and multipliers — adjustable via /calibrate endpoint
+float phOffset=0.0f, phMult=1.0f;
+float ecOffset=0.0f, ecMult=1.0f;
+
+// ------------------- Persistent Storage -------------------
+Preferences prefs;
+
+// ------------------- Solution Tracking -------------------
+float pumpFlowRateMlPerSec = 1.0f;
+float pumpTotalMl[5] = {0};  // lifetime ml per pump, saved to NVS
+float pumpWeekMl[5]  = {0};  // this-week ml per pump, saved to NVS
+int   lastSavedWeek  = 0;
+
+float readPH() {
+    int r = adcAverage(PH_PIN);
+    float raw = r * (3.3f / 4095.0f) * 3.5f;
+    return (raw + phOffset) * phMult;
+}
+float readEC() {
+    int r = adcAverage(EC_PIN);
+    float raw = r * (3.3f / 4095.0f) * 2.0f;
+    return (raw + ecOffset) * ecMult;
+}
 float readHumidity() { float h=dht.readHumidity();    return isnan(h) ? -1.0f : h; }
 float readTemp() {
     // NTC 10K thermistor with 10K pull-up resistor to 3.3V — adjust beta (3950) for your sensor
@@ -56,14 +79,31 @@ float microHistory[HISTORY_SIZE]={0}, groHistory[HISTORY_SIZE]={0}, bloomHistory
 int historyIndex=0;
 int historyCount=0; // how many slots have been written (caps at HISTORY_SIZE)
 int currentWeek=1;
+int weekOffset=0;  // manual UI adjustment on top of NTP-computed week
 
 // ------------------- Growth Stage Recipes -------------------
-struct Recipe { float micro, gro, bloom, phUp, phDown; };
 Recipe weekRecipes[12] = {
     {5,3,1,0,0},{5,3,2,0,0},{6,4,2,0,0},{6,4,3,0,0}, // weeks 1-4
     {7,5,4,0,0},{8,5,4,0,0},{8,6,4,0,0},{9,6,5,0,0}, // weeks 5-8
     {10,7,5,0,0},{10,7,6,0,0},{11,8,6,0,0},{12,8,7,0,0} // weeks 9-12
 };
+
+// ------------------- Pump Stop Helper -------------------
+void recordPumpStop(int i) {
+    if (pumps[i].onStartMillis > 0) {
+        float ml = ((millis() - pumps[i].onStartMillis) / 1000.0f) * pumpFlowRateMlPerSec;
+        pumpTotalMl[i] += ml;
+        pumpWeekMl[i]  += ml;
+        prefs.begin("hydro", false);
+        prefs.putFloat(("tot_" + String(i)).c_str(), pumpTotalMl[i]);
+        prefs.putFloat(("wk_"  + String(i)).c_str(), pumpWeekMl[i]);
+        prefs.end();
+    }
+    pumps[i].state         = false;
+    pumps[i].onStartMillis = 0;
+    digitalWrite(pumps[i].pin, LOW);
+    pumpStopTimes[i]       = 0;
+}
 
 // ------------------- Setup -------------------
 void setup(){
@@ -71,9 +111,23 @@ void setup(){
     WiFi.begin(ssid,password);
     Serial.print("Connecting WiFi...");
     while(WiFi.status()!=WL_CONNECTED){delay(500); Serial.print(".");}
-    Serial.println("\nConnected! IP: "); Serial.println(WiFi.localIP());
+    Serial.print("\nConnected! IP: "); Serial.println(WiFi.localIP());
+
+    // Sync time via NTP for accurate week tracking across reboots
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.print("Syncing NTP...");
+    for(int i=0; i<20 && time(nullptr)<100000; i++){delay(500); Serial.print(".");}
+    Serial.println(time(nullptr)>100000 ? " OK" : " FAILED");
 
     dht.begin();
+    prefs.begin("hydro", false);
+    pumpFlowRateMlPerSec = prefs.getFloat("flow_rate", 1.0f);
+    lastSavedWeek        = prefs.getInt("last_week", 0);
+    for(int i=0;i<PUMP_COUNT;i++){
+        pumpTotalMl[i] = prefs.getFloat(("tot_"+String(i)).c_str(), 0.0f);
+        pumpWeekMl[i]  = prefs.getFloat(("wk_" +String(i)).c_str(), 0.0f);
+    }
+    prefs.end();
     for(int i=0;i<PUMP_COUNT;i++){pinMode(pumps[i].pin,OUTPUT); digitalWrite(pumps[i].pin,LOW);}
     setupWebInterface(server);  // all routes registered in WebInterface.cpp
     server.begin();
@@ -86,7 +140,7 @@ void loop(){
     unsigned long now=millis();
     for(int i=0;i<PUMP_COUNT;i++){
         if(pumps[i].state && pumpStopTimes[i]>0 && now>=pumpStopTimes[i]){
-            pumps[i].state=false; digitalWrite(pumps[i].pin,LOW); pumpStopTimes[i]=0; pumps[i].onStartMillis=0;
+            recordPumpStop(i);
         }
     }
 
@@ -110,6 +164,23 @@ void loop(){
     static unsigned long lastAutoCheck = 0;
     if(now - lastAutoCheck >= 120000){
         lastAutoCheck = now;
+
+        // Update week from NTP (survives reboots). weekOffset allows manual UI correction.
+        time_t now_t = time(nullptr);
+        if(now_t > 100000){
+            int ntpWeek = (int)((now_t - (time_t)GROW_START_EPOCH) / (7L * 86400L)) + 1 + weekOffset;
+            currentWeek = constrain(ntpWeek, 1, 12);
+        }
+
+        // Reset weekly ml totals when the week advances
+        if(lastSavedWeek != 0 && currentWeek != lastSavedWeek){
+            for(int i=0;i<PUMP_COUNT;i++) pumpWeekMl[i]=0;
+            prefs.begin("hydro",false);
+            for(int i=0;i<PUMP_COUNT;i++) prefs.putFloat(("wk_"+String(i)).c_str(),0.0f);
+            prefs.putInt("last_week", currentWeek);
+            prefs.end();
+        }
+        lastSavedWeek = currentWeek;
 
         // Skip if any pump is already running
         bool anyOn = false;

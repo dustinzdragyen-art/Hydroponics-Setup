@@ -1,6 +1,10 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
+#include <time.h>
+#include <Preferences.h>
 #include "WebInterface.h"
+#include "config.h"
 
 // =====================================================
 // External variables from main.cpp
@@ -29,6 +33,15 @@ extern int historyIndex;
 extern int historyCount;
 extern const int HISTORY_SIZE;
 extern int currentWeek;
+extern int weekOffset;
+
+extern float phOffset, phMult, ecOffset, ecMult;
+
+extern float pumpFlowRateMlPerSec;
+extern float pumpTotalMl[];
+extern float pumpWeekMl[];
+extern Recipe weekRecipes[];
+extern Preferences prefs;
 
 // =====================================================
 // Web Interface Setup
@@ -38,7 +51,7 @@ void setupWebInterface(WebServer &server)
 {
     // ---------------- Main Dashboard ----------------
     server.on("/", [&server]() {
-        server.send_P(200, "text/html", R"HTML(
+server.send_P(200, "text/html", R"HTML(
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -79,10 +92,43 @@ canvas{max-height:220px}
 .thresh-input{background:#1f2937;border:1px solid #374151;border-radius:5px;color:#e5e7eb;padding:5px 8px;font-size:12px;width:72px}
 .thresh-input:focus{outline:none;border-color:#34d399}
 .thresh-sep{font-size:12px;color:#6b7280}
+.status-bar{display:flex;gap:12px;flex-wrap:wrap;background:#0d1117;border:1px solid #374151;border-radius:8px;padding:10px 14px;margin-bottom:14px}
+.status-item{font-size:11px;color:#6b7280}
+.status-item span{color:#9ca3af;font-weight:600}
+.week-ctrl{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.week-btn{background:#1f2937;color:#34d399;border:1px solid #374151;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:18px;font-weight:700}
+.week-btn:hover{border-color:#34d399}
+.week-display{font-size:15px;font-weight:700;color:#e5e7eb;min-width:70px;text-align:center}
+.cal-panel{background:#0d1117;border:1px solid #374151;border-radius:8px;padding:14px;margin-bottom:14px}
+.cal-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.cal-row:last-child{margin-bottom:0}
+.cal-label{font-size:12px;color:#9ca3af;min-width:40px}
+.cal-input{background:#1f2937;border:1px solid #374151;border-radius:5px;color:#e5e7eb;padding:5px 8px;font-size:12px;width:72px}
+.cal-input:focus{outline:none;border-color:#34d399}
+.cal-btn{background:#374151;color:#e5e7eb;border:1px solid #4b5563;border-radius:5px;padding:5px 12px;font-size:12px;cursor:pointer}
+.cal-btn:hover{background:#34d399;color:#111827;border-color:#34d399}
+.card.alert{border:2px solid #ef4444 !important;background:#2d1515}
+.card.alert .card-value{color:#ef4444}
+.recipe-panel{background:#0d1117;border:1px solid #374151;border-radius:8px;padding:14px;margin-bottom:14px}
+.recipe-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.recipe-header span:first-child{font-size:13px;font-weight:700;color:#34d399}
+.recipe-flow{font-size:12px;color:#9ca3af;display:flex;align-items:center;gap:6px}
+.usage-table{width:100%;border-collapse:collapse;font-size:12px}
+.usage-table th{color:#6b7280;text-align:left;padding:4px 8px;border-bottom:1px solid #374151;font-weight:600}
+.usage-table td{color:#e5e7eb;padding:5px 8px;border-bottom:1px solid #1f2937}
+.usage-table tr:last-child td{border-bottom:none}
+.reset-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 </style>
 </head>
 <body>
 <h1>&#127807; Hydroponics Controller</h1>
+
+<div class="status-bar">
+  <div class="status-item">Uptime: <span id="st-uptime">--</span></div>
+  <div class="status-item">WiFi: <span id="st-rssi">--</span> dBm</div>
+  <div class="status-item">Week: <span id="st-week">--</span></div>
+  <div class="status-item">Free Heap: <span id="st-heap">--</span> B</div>
+</div>
 
 <div class="cards">
   <div class="card">
@@ -106,8 +152,48 @@ canvas{max-height:220px}
   </div>
 </div>
 
+<h2>Growth Week</h2>
+<div class="week-ctrl">
+  <button class="week-btn" onclick="changeWeek(-1)">&#8722;</button>
+  <span class="week-display" id="week-display">Week --</span>
+  <button class="week-btn" onclick="changeWeek(+1)">&#43;</button>
+</div>
+
+<h2>Recipe &amp; Usage</h2>
+<div class="recipe-panel">
+  <div class="recipe-header">
+    <span id="recipe-week-label">Week -- Recipe</span>
+    <span class="recipe-flow">Flow: <input class="cal-input" id="flow-input" type="number" step="0.1" min="0.1" value="1.0"> ml/s <button class="cal-btn" onclick="setFlowRate()">Set</button></span>
+  </div>
+  <table class="usage-table">
+    <thead><tr><th>Nutrient</th><th>Target</th><th>This Week</th><th>All Time</th></tr></thead>
+    <tbody id="usage-body"></tbody>
+  </table>
+  <div class="reset-row">
+    <button class="cal-btn" onclick="resetMl('week')">Reset This Week</button>
+    <button class="cal-btn" onclick="resetMl('total')">Reset All Time</button>
+    <button class="cal-btn" style="border-color:#ef4444;color:#ef4444" onclick="newBatch()">&#127807; New Batch</button>
+  </div>
+</div>
+
 <h2>Pump Controls</h2>
 <div class="pump-grid" id="pump-grid"></div>
+
+<h2>Sensor Calibration</h2>
+<div class="cal-panel">
+  <div class="cal-row">
+    <span class="cal-label">pH</span>
+    Offset <input class="cal-input" type="number" id="cal-ph-offset" step="0.01" value="0">
+    &times; Mult <input class="cal-input" type="number" id="cal-ph-mult" step="0.01" value="1">
+    <button class="cal-btn" onclick="applyCal('ph')">Apply</button>
+  </div>
+  <div class="cal-row">
+    <span class="cal-label">EC</span>
+    Offset <input class="cal-input" type="number" id="cal-ec-offset" step="0.01" value="0">
+    &times; Mult <input class="cal-input" type="number" id="cal-ec-mult" step="0.01" value="1">
+    <button class="cal-btn" onclick="applyCal('ec')">Apply</button>
+  </div>
+</div>
 
 <h2>Sensor History</h2>
 <div class="gtoggle">
@@ -244,6 +330,18 @@ async function refreshSensors() {
     document.getElementById('v-ec').textContent   = d.ec.toFixed(2);
     document.getElementById('v-temp').textContent = (d.temp * 9/5 + 32).toFixed(1);
     document.getElementById('v-hum').textContent  = d.humidity >= 0 ? d.humidity.toFixed(1) : '--';
+    const tempF = d.temp * 9/5 + 32;
+    const checks = [
+      { id:'v-ph',   val:d.ph,       key:'ph'   },
+      { id:'v-ec',   val:d.ec,       key:'ec'   },
+      { id:'v-temp', val:tempF,      key:'temp' },
+      { id:'v-hum',  val:d.humidity, key:'hum'  }
+    ];
+    for (const c of checks) {
+      const card = document.getElementById(c.id).closest('.card');
+      const t = thresholds[c.key];
+      card.classList.toggle('alert', c.val < t.min || c.val > t.max);
+    }
   } catch(e) {}
 }
 setInterval(refreshSensors, 5000);
@@ -343,6 +441,7 @@ async function loadHistory() {
       humidity:    tail(raw.humidity),
       currentWeek: raw.currentWeek
     };
+    document.getElementById('week-display').textContent = 'Week ' + raw.currentWeek;
     if (viewMode === 'c') renderCombined(histData);
     else                  renderSeparate(histData);
   } catch(e) {}
@@ -375,6 +474,85 @@ function updateThreshold(key) {
   }
 }
 
+// ---- Recipe & Usage ----
+async function refreshRecipe() {
+  try {
+    const d = await fetch('/recipe').then(r => r.json());
+    document.getElementById('recipe-week-label').textContent = 'Week ' + d.week + ' Recipe';
+    document.getElementById('flow-input').value = d.flowRate.toFixed(2);
+    const rows = [
+      { name:'Micro',   target: d.recipe.micro  },
+      { name:'Gro',     target: d.recipe.gro    },
+      { name:'Bloom',   target: d.recipe.bloom  },
+      { name:'pH Up',   target: d.recipe.phUp   },
+      { name:'pH Down', target: d.recipe.phDown }
+    ];
+    const tbody = document.getElementById('usage-body');
+    tbody.innerHTML = '';
+    for (const r of rows) {
+      const wk  = (d.weekMl[r.name]  || 0).toFixed(1);
+      const tot = (d.totalMl[r.name] || 0).toFixed(1);
+      tbody.innerHTML += '<tr><td>' + r.name + '</td><td>' + r.target + '</td><td>' + wk + ' ml</td><td>' + tot + ' ml</td></tr>';
+    }
+  } catch(e) {}
+}
+async function setFlowRate() {
+  const r = parseFloat(document.getElementById('flow-input').value) || 1.0;
+  await fetch('/flowrate?rate=' + r);
+}
+async function resetMl(which) {
+  await fetch('/resetml?which=' + which);
+  refreshRecipe();
+}
+async function newBatch() {
+  if (!confirm('Start a new batch? This will reset all ml totals and set the week back to 1.')) return;
+  await fetch('/resetml?which=total');
+  await fetch('/setweek?week=1');
+  loadHistory();
+  refreshRecipe();
+}
+setInterval(refreshRecipe, 15000);
+refreshRecipe();
+
+// ---- Status bar ----
+async function refreshStatus() {
+  try {
+    const d = await fetch('/status').then(r => r.json());
+    const s = d.uptimeSec, h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+    const fmt = n => String(n).padStart(2,'0');
+    document.getElementById('st-uptime').textContent = h+':'+fmt(m)+':'+fmt(sec);
+    document.getElementById('st-rssi').textContent   = d.rssi;
+    document.getElementById('st-week').textContent   = d.week;
+    document.getElementById('st-heap').textContent   = d.freeHeap.toLocaleString();
+  } catch(e) {}
+}
+setInterval(refreshStatus, 10000); refreshStatus();
+
+// ---- Week control ----
+async function changeWeek(delta) {
+  const cur  = histData ? histData.currentWeek : 1;
+  const next = Math.max(1, Math.min(12, cur + delta));
+  await fetch('/setweek?week=' + next);
+  loadHistory();
+}
+
+// ---- Calibration ----
+async function loadCalibration() {
+  try {
+    const d = await fetch('/calibration').then(r => r.json());
+    document.getElementById('cal-ph-offset').value = d.ph.offset;
+    document.getElementById('cal-ph-mult').value   = d.ph.mult;
+    document.getElementById('cal-ec-offset').value = d.ec.offset;
+    document.getElementById('cal-ec-mult').value   = d.ec.mult;
+  } catch(e) {}
+}
+async function applyCal(sensor) {
+  const offset = parseFloat(document.getElementById('cal-'+sensor+'-offset').value)||0;
+  const mult   = parseFloat(document.getElementById('cal-'+sensor+'-mult').value)||1;
+  await fetch('/calibrate?sensor='+sensor+'&offset='+offset+'&mult='+mult);
+}
+loadCalibration();
+
 setInterval(loadHistory, 15000);
 loadHistory();
 </script>
@@ -385,7 +563,7 @@ loadHistory();
 
     // ---------------- Current Sensors (JSON) ----------------
     server.on("/sensors", [&server]() {
-        JsonDocument doc;
+JsonDocument doc;
         doc["ph"]       = readPH();
         doc["ec"]       = readEC();
         doc["temp"]     = readTemp();
@@ -397,7 +575,7 @@ loadHistory();
 
     // ---------------- Pump Status + Remaining Time ----------------
     server.on("/pumps", [&server]() {
-        JsonDocument doc;
+JsonDocument doc;
         unsigned long now = millis();
 
         for (int i = 0; i < PUMP_COUNT; i++) {
@@ -415,7 +593,7 @@ loadHistory();
 
     // ---------------- Pump Control ----------------
     server.on("/dose", [&server]() {
-        if (!server.hasArg("id") || !server.hasArg("action")) {
+if (!server.hasArg("id") || !server.hasArg("action")) {
             server.send(400, "text/plain", "Missing id/action");
             return;
         }
@@ -440,24 +618,16 @@ loadHistory();
         }
 
         if (action == "on") {
-            // Enforce single-pump rule: turn off any running pump before starting this one
+            // Enforce single-pump rule: stop any running pump (recording its ml) before starting this one
             for (int i = 0; i < PUMP_COUNT; i++) {
-                if (i != index && pumps[i].state) {
-                    pumps[i].state = false;
-                    digitalWrite(pumps[i].pin, LOW);
-                    pumpStopTimes[i] = 0;
-                    pumps[i].onStartMillis = 0;
-                }
+                if (i != index && pumps[i].state) recordPumpStop(i);
             }
             pumps[index].state = true;
             digitalWrite(pumps[index].pin, HIGH);
             pumpStopTimes[index] = millis() + PUMP_AUTO_OFF_MS;
             pumps[index].onStartMillis = millis();
         } else {
-            pumps[index].state = false;
-            digitalWrite(pumps[index].pin, LOW);
-            pumpStopTimes[index] = 0;
-            pumps[index].onStartMillis = 0;
+            recordPumpStop(index);
         }
 
         server.send(200, "text/plain", "OK");
@@ -492,5 +662,96 @@ loadHistory();
         String output;
         serializeJson(doc, output);
         server.send(200, "application/json", output);
+    });
+
+    // ---------------- System Status ----------------
+    server.on("/status", [&server]() {
+JsonDocument doc;
+        doc["uptimeSec"] = millis() / 1000UL;
+        doc["rssi"]      = WiFi.RSSI();
+        doc["freeHeap"]  = ESP.getFreeHeap();
+        doc["week"]      = currentWeek;
+        String output; serializeJson(doc, output);
+        server.send(200, "application/json", output);
+    });
+
+    // ---------------- Set Week ----------------
+    server.on("/setweek", [&server]() {
+if (!server.hasArg("week")) { server.send(400, "text/plain", "Missing week"); return; }
+        int w = server.arg("week").toInt();
+        if (w < 1 || w > 12) { server.send(400, "text/plain", "Out of range 1-12"); return; }
+        time_t now_t = time(nullptr);
+        int ntpWeek = (int)((now_t - (time_t)GROW_START_EPOCH) / (7L * 86400L)) + 1;
+        weekOffset = w - ntpWeek;
+        currentWeek = w;
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- Calibration GET ----------------
+    server.on("/calibration", [&server]() {
+        JsonDocument doc;
+        doc["ph"]["offset"] = phOffset; doc["ph"]["mult"] = phMult;
+        doc["ec"]["offset"] = ecOffset; doc["ec"]["mult"] = ecMult;
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    // ---------------- Calibration SET ----------------
+    server.on("/calibrate", [&server]() {
+        if (!server.hasArg("sensor")) { server.send(400, "text/plain", "Missing sensor"); return; }
+        String s  = server.arg("sensor");
+        float off = server.hasArg("offset") ? server.arg("offset").toFloat() : 0.0f;
+        float mul = server.hasArg("mult")   ? server.arg("mult").toFloat()   : 1.0f;
+        if (mul == 0.0f) mul = 1.0f;
+        if      (s == "ph") { phOffset = off; phMult = mul; }
+        else if (s == "ec") { ecOffset = off; ecMult = mul; }
+        else { server.send(400, "text/plain", "Unknown sensor, use ph or ec"); return; }
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- Recipe & Usage ----------------
+    server.on("/recipe", [&server]() {
+        JsonDocument doc;
+        int week = constrain(currentWeek, 1, 12);
+        Recipe r = weekRecipes[week - 1];
+        doc["week"]              = week;
+        doc["recipe"]["micro"]   = r.micro;
+        doc["recipe"]["gro"]     = r.gro;
+        doc["recipe"]["bloom"]   = r.bloom;
+        doc["recipe"]["phUp"]    = r.phUp;
+        doc["recipe"]["phDown"]  = r.phDown;
+        doc["flowRate"]          = pumpFlowRateMlPerSec;
+        JsonObject week_ml  = doc["weekMl"].to<JsonObject>();
+        JsonObject total_ml = doc["totalMl"].to<JsonObject>();
+        for (int i = 0; i < PUMP_COUNT; i++) {
+            week_ml[pumps[i].name]  = pumpWeekMl[i];
+            total_ml[pumps[i].name] = pumpTotalMl[i];
+        }
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    // ---------------- Set Flow Rate ----------------
+    server.on("/flowrate", [&server]() {
+        if (!server.hasArg("rate")) { server.send(400, "text/plain", "Missing rate"); return; }
+        float r = server.arg("rate").toFloat();
+        if (r <= 0) { server.send(400, "text/plain", "Rate must be > 0"); return; }
+        pumpFlowRateMlPerSec = r;
+        prefs.begin("hydro", false);
+        prefs.putFloat("flow_rate", r);
+        prefs.end();
+        server.send(200, "text/plain", "OK");
+    });
+
+    // ---------------- Reset ML Totals ----------------
+    server.on("/resetml", [&server]() {
+        String which = server.hasArg("which") ? server.arg("which") : "week";
+        prefs.begin("hydro", false);
+        for (int i = 0; i < PUMP_COUNT; i++) {
+            if (which == "total") { pumpTotalMl[i] = 0; prefs.putFloat(("tot_"+String(i)).c_str(), 0.0f); }
+            pumpWeekMl[i] = 0; prefs.putFloat(("wk_"+String(i)).c_str(), 0.0f);
+        }
+        prefs.end();
+        server.send(200, "text/plain", "OK");
     });
 }
